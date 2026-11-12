@@ -1,4 +1,4 @@
-import { Children, useId, useRef, useState, type ReactNode } from 'react';
+import { Children, useId, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 
 interface TestimonialsCarouselProps {
   children: ReactNode;
@@ -12,6 +12,9 @@ export function TestimonialsCarousel({
   const slides = Children.toArray(children);
   const id = useId();
   const viewport = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ pointerId: number; startX: number; scrollLeft: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const currentIndex = Math.min(activeIndex, Math.max(0, slides.length - 1));
   const controlClass = 'inline-flex min-h-12 min-w-12 items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-semibold text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-background disabled:hover:text-foreground';
@@ -22,6 +25,53 @@ export function TestimonialsCarousel({
     const nextIndex = Math.max(0, Math.min(index, slides.length - 1));
     element.scrollTo({ left: nextIndex * element.clientWidth, behavior: 'auto' });
     setActiveIndex(nextIndex);
+  }
+
+  function startDrag(event: PointerEvent<HTMLDivElement>) {
+    suppressClick.current = false;
+    if (event.pointerType !== 'mouse' || event.button !== 0 || slides.length < 2) return;
+    drag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: event.currentTarget.scrollLeft,
+      moved: false,
+    };
+  }
+
+  function moveDrag(event: PointerEvent<HTMLDivElement>) {
+    const gesture = drag.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const distance = event.clientX - gesture.startX;
+    if (!gesture.moved && Math.abs(distance) < 5) return;
+    if (!gesture.moved) {
+      gesture.moved = true;
+      suppressClick.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.currentTarget.style.scrollSnapType = 'none';
+      setIsDragging(true);
+    }
+    event.preventDefault();
+    event.currentTarget.scrollLeft = gesture.scrollLeft - distance;
+  }
+
+  function endDrag(event: PointerEvent<HTMLDivElement>) {
+    const gesture = drag.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    drag.current = null;
+    const element = event.currentTarget;
+    if (element.hasPointerCapture(event.pointerId)) {
+      element.releasePointerCapture(event.pointerId);
+    }
+    element.style.scrollSnapType = '';
+    setIsDragging(false);
+    if (gesture.moved && element.clientWidth > 0) {
+      const distance = element.scrollLeft - gesture.scrollLeft;
+      const startIndex = Math.round(gesture.scrollLeft / element.clientWidth);
+      const nextIndex = Math.abs(distance) > Math.min(60, element.clientWidth * 0.15)
+        ? startIndex + Math.sign(distance) * Math.max(1, Math.round(Math.abs(distance) / element.clientWidth))
+        : startIndex;
+      goTo(nextIndex);
+    }
   }
 
   if (slides.length === 0) return null;
@@ -35,16 +85,32 @@ export function TestimonialsCarousel({
       <h2 id={`${id}-title`} className="text-center text-3xl font-bold tracking-tight sm:text-4xl">
         {title}
       </h2>
-      <p id={`${id}-help`} className="sr-only">
-        Use as setas esquerda e direita para navegar ou deslize horizontalmente no celular.
+      <p id={`${id}-help`} className="mt-3 text-center text-sm text-foreground/70">
+        Arraste para os lados ou deslize no celular. Também é possível navegar pelas setas do teclado.
       </p>
       <div
         id={`${id}-slides`}
         ref={viewport}
         tabIndex={slides.length > 1 ? 0 : undefined}
-        aria-label="Depoimentos"
+        aria-label={title}
         aria-describedby={`${id}-help`}
-        className="mt-8 flex w-full snap-x snap-mandatory overflow-x-auto overscroll-x-contain rounded-xl border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-4 focus-visible:ring-offset-background"
+        className={`mt-8 flex w-full select-none snap-x snap-mandatory overflow-x-auto overscroll-x-contain rounded-xl border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-4 focus-visible:ring-offset-background ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
+        onPointerLeave={(event) => {
+          if (drag.current && !drag.current.moved) endDrag(event);
+        }}
+        onDragStart={(event) => event.preventDefault()}
+        onClickCapture={(event) => {
+          if (suppressClick.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressClick.current = false;
+          }
+        }}
         onScroll={() => {
           const element = viewport.current;
           if (element && element.clientWidth > 0) {
